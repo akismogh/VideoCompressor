@@ -7,6 +7,7 @@ import { useFFmpeg } from './hooks/useFFmpeg'
 import { readVideoMeta } from './lib/videoMeta'
 import { compressVideo } from './lib/compress'
 import { onFFmpegProgress } from './lib/ffmpeg'
+import { consumePendingSharedFile } from './lib/shareTarget'
 import type { CompressResult, VideoMeta } from './types'
 
 const ACCEPTED_TYPES = ['video/mp4', 'video/quicktime']
@@ -14,6 +15,9 @@ const ACCEPTED_TYPES = ['video/mp4', 'video/quicktime']
 function App() {
   const [video, setVideo] = useState<VideoMeta | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [awaitingShare, setAwaitingShare] = useState(
+    () => new URLSearchParams(window.location.search).has('shared'),
+  )
   const [trimStart, setTrimStart] = useState(0)
   const [trimEnd, setTrimEnd] = useState(0)
   const [mute, setMute] = useState(false)
@@ -66,6 +70,18 @@ function App() {
       )
     }
   }
+
+  useEffect(() => {
+    if (!awaitingShare) return
+    window.history.replaceState({}, '', window.location.pathname)
+    consumePendingSharedFile()
+      .then((file) => {
+        if (file) return handleSelectFile(file)
+        setUploadError('No shared video was found. Try sharing it again.')
+      })
+      .finally(() => setAwaitingShare(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleCompress = async () => {
     if (!video) return
@@ -123,7 +139,16 @@ function App() {
       </header>
 
       <main className="mx-auto flex max-w-lg flex-col gap-5 px-4 pb-16">
-        {!video && (
+        {awaitingShare && !video && (
+          <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 px-6 py-16 text-center">
+            <div className="text-4xl animate-pulse">🎬</div>
+            <p className="text-base font-medium text-slate-700 dark:text-slate-200">
+              Loading shared video…
+            </p>
+          </div>
+        )}
+
+        {!awaitingShare && !video && (
           <FileUpload onSelect={handleSelectFile} error={uploadError} />
         )}
 
