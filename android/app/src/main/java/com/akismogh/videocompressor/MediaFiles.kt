@@ -28,9 +28,10 @@ object MediaFiles {
 
     private fun stamp(): String = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
 
-    fun newRecordingFile(ctx: Context): File {
+    /** Clears old inputs and returns the base file name for a new recording's segments. */
+    fun newRecordingBase(ctx: Context): String {
         clearDir(inputDir(ctx))
-        return File(inputDir(ctx), "screen-${stamp()}.mp4")
+        return "screen-${stamp()}"
     }
 
     fun newOutputFile(ctx: Context, name: String): File {

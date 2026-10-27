@@ -31,8 +31,6 @@ class RecordService : Service() {
         const val EXTRA_CODE = "code"
         const val EXTRA_DATA = "data"
         const val EXTRA_AUDIO = "audio"
-        const val EXTRA_WIDTH = "width"
-        const val EXTRA_HEIGHT = "height"
         const val EXTRA_DPI = "dpi"
         private const val CHANNEL_RECORDING = "recording"
         private const val CHANNEL_DONE = "recording_done"
@@ -87,12 +85,12 @@ class RecordService : Service() {
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val rec = try {
             ScreenRecorder(
+                this,
                 mp,
-                intent.getIntExtra(EXTRA_WIDTH, 1080),
-                intent.getIntExtra(EXTRA_HEIGHT, 1920),
                 intent.getIntExtra(EXTRA_DPI, 420),
                 wantsAudio,
-                MediaFiles.newRecordingFile(this),
+                MediaFiles.inputDir(this),
+                MediaFiles.newRecordingBase(this),
             ).also { it.start() }
         } catch (e: Exception) {
             Log.e("RecordService", "recorder failed to start", e)

@@ -16,7 +16,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
-import android.util.DisplayMetrics
 import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowInsets
@@ -240,29 +239,15 @@ class MainActivity : Activity() {
                     RecState.changed()
                     return
                 }
-                val (w, h) = screenSize()
                 leaveWhenRecording = true
                 startForegroundService(Intent(this, RecordService::class.java)
                     .setAction(RecordService.ACTION_START)
                     .putExtra(RecordService.EXTRA_CODE, resultCode)
                     .putExtra(RecordService.EXTRA_DATA, data)
                     .putExtra(RecordService.EXTRA_AUDIO, wantAudio)
-                    .putExtra(RecordService.EXTRA_WIDTH, w)
-                    .putExtra(RecordService.EXTRA_HEIGHT, h)
                     .putExtra(RecordService.EXTRA_DPI, resources.displayMetrics.densityDpi))
             }
         }
-    }
-
-    private fun screenSize(): Pair<Int, Int> {
-        if (Build.VERSION.SDK_INT >= 30) {
-            val b = windowManager.maximumWindowMetrics.bounds
-            return b.width() to b.height()
-        }
-        val dm = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        windowManager.defaultDisplay.getRealMetrics(dm)
-        return dm.widthPixels to dm.heightPixels
     }
 
     // ── Save / share the compressed result ───────────────────────────────────

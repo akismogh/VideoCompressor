@@ -43,7 +43,8 @@ export function RecordPanel({ state, error, onStart, onStop }: RecordPanelProps)
           </label>
           <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
             The app steps aside while recording. Stop from the notification,
-            the status-bar chip, or by coming back here.
+            the status-bar chip, or by coming back here. If you rotate the
+            phone, the part in the orientation you recorded longest is kept.
           </p>
         </>
       )}
