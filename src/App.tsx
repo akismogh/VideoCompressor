@@ -3,14 +3,14 @@ import { FileUpload } from './components/FileUpload'
 import { VideoTrimmer } from './components/VideoTrimmer'
 import { CompressionPanel } from './components/CompressionPanel'
 import { ResultPanel } from './components/ResultPanel'
+import { RecordPanel } from './components/RecordPanel'
 import { useFFmpeg } from './hooks/useFFmpeg'
+import { useNativeRecording } from './hooks/useNativeRecording'
 import { readVideoMeta } from './lib/videoMeta'
 import { compressVideo } from './lib/compress'
 import { onFFmpegProgress } from './lib/ffmpeg'
 import { consumePendingSharedFile } from './lib/shareTarget'
 import type { CompressResult, VideoMeta } from './types'
-
-const ACCEPTED_TYPES = ['video/mp4', 'video/quicktime']
 
 function App() {
   const [video, setVideo] = useState<VideoMeta | null>(null)
@@ -43,7 +43,7 @@ function App() {
     setUploadError(null)
 
     const looksValid =
-      ACCEPTED_TYPES.includes(file.type) || /\.(mp4|mov)$/i.test(file.name)
+      file.type.startsWith('video/') || /\.(mp4|mov)$/i.test(file.name)
     if (!looksValid) {
       setUploadError('Please choose an MP4 or MOV video.')
       return
@@ -70,6 +70,9 @@ function App() {
       )
     }
   }
+
+  const recorder = useNativeRecording(handleSelectFile)
+  const loadingInput = awaitingShare || recorder.importing
 
   useEffect(() => {
     if (!awaitingShare) return
@@ -139,16 +142,27 @@ function App() {
       </header>
 
       <main className="mx-auto flex max-w-lg flex-col gap-5 px-4 pb-16">
-        {awaitingShare && !video && (
+        {recorder.supported &&
+          !loadingInput &&
+          (!video || recorder.state.phase !== 'idle') && (
+            <RecordPanel
+              state={recorder.state}
+              error={recorder.error}
+              onStart={recorder.start}
+              onStop={recorder.stop}
+            />
+          )}
+
+        {loadingInput && !video && (
           <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 px-6 py-16 text-center">
             <div className="text-4xl animate-pulse">🎬</div>
             <p className="text-base font-medium text-slate-700 dark:text-slate-200">
-              Loading shared video…
+              {recorder.importing ? 'Loading video…' : 'Loading shared video…'}
             </p>
           </div>
         )}
 
-        {!awaitingShare && !video && (
+        {!loadingInput && !video && (
           <FileUpload onSelect={handleSelectFile} error={uploadError} />
         )}
 
@@ -181,6 +195,7 @@ function App() {
 
             {result && (
               <ResultPanel
+                key={result.url}
                 result={result}
                 originalSize={video.file.size}
                 originalName={video.file.name}

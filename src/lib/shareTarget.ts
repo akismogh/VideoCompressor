@@ -2,7 +2,8 @@ const SHARE_CACHE = 'share-target-cache'
 const SHARE_KEY = '/__shared-video__'
 
 export function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) return
+  // The Android app shell has its own share handling and no SW origin to serve from.
+  if (!('serviceWorker' in navigator) || window.VCAndroid) return
   window.addEventListener('load', () => {
     navigator.serviceWorker
       .register(new URL('sw.js', document.baseURI))

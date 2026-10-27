@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Android build output (assets are synced from dist by build-apk.ps1)
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/app/src/main/assets/
+android/local.properties
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

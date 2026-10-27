@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { CompressResult } from '../types'
 import { formatBytes } from '../lib/format'
+import { native, saveOutputNative } from '../lib/native'
 
 interface ResultPanelProps {
   result: CompressResult
@@ -19,6 +20,8 @@ export function ResultPanel({
   originalName,
 }: ResultPanelProps) {
   const [shareError, setShareError] = useState<string | null>(null)
+  const [nativeBusy, setNativeBusy] = useState(false)
+  const [nativeSaved, setNativeSaved] = useState(false)
   const fileName = useMemo(
     () => outputFileName(originalName),
     [originalName],
@@ -40,6 +43,23 @@ export function ResultPanel({
         return false
       }
     })()
+
+  // Android app: the shell saves to the gallery once, then shares that copy.
+  const handleNative = async (share: boolean) => {
+    if (!native) return
+    if (share && nativeSaved) {
+      native.shareSaved()
+      return
+    }
+    setNativeBusy(true)
+    try {
+      if (await saveOutputNative(result.blob, fileName, share)) {
+        setNativeSaved(true)
+      }
+    } finally {
+      setNativeBusy(false)
+    }
+  }
 
   const handleShare = async () => {
     setShareError(null)
@@ -92,24 +112,47 @@ export function ResultPanel({
         )}
       </div>
 
-      <div className="mt-4 flex gap-3">
-        <a
-          href={result.url}
-          download={fileName}
-          className="flex-1 rounded-xl bg-indigo-600 px-4 py-3 text-center font-medium text-white transition-colors hover:bg-indigo-500"
-        >
-          Download
-        </a>
-        {canShareFiles && (
+      {native && (
+        <div className="mt-4 flex gap-3">
           <button
             type="button"
-            onClick={handleShare}
-            className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-3 font-medium text-slate-700 dark:text-slate-200 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+            onClick={() => handleNative(false)}
+            disabled={nativeBusy || nativeSaved}
+            className="flex-1 rounded-xl bg-indigo-600 px-4 py-3 font-medium text-white transition-colors hover:bg-indigo-500 disabled:bg-slate-300 dark:disabled:bg-slate-700"
+          >
+            {nativeBusy ? 'Saving…' : nativeSaved ? 'Saved' : 'Save to Photos'}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleNative(true)}
+            disabled={nativeBusy}
+            className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-3 font-medium text-slate-700 dark:text-slate-200 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
           >
             Share
           </button>
-        )}
-      </div>
+        </div>
+      )}
+
+      {!native && (
+        <div className="mt-4 flex gap-3">
+          <a
+            href={result.url}
+            download={fileName}
+            className="flex-1 rounded-xl bg-indigo-600 px-4 py-3 text-center font-medium text-white transition-colors hover:bg-indigo-500"
+          >
+            Download
+          </a>
+          {canShareFiles && (
+            <button
+              type="button"
+              onClick={handleShare}
+              className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-3 font-medium text-slate-700 dark:text-slate-200 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              Share
+            </button>
+          )}
+        </div>
+      )}
       {shareError && (
         <p className="mt-2 text-sm text-red-500 text-center">{shareError}</p>
       )}
