@@ -15,6 +15,11 @@ object RecState {
 
     @Volatile var phase = Phase.IDLE
     @Volatile var startedAt = 0L
+
+    /** A consented capture session is alive, so recording again needs no prompt. */
+    @Volatile var sessionActive = false
+    /** elapsedRealtime() at which the idle session ends; 0 while recording or with no session. */
+    @Volatile var sessionExpiresAt = 0L
     @Volatile var error: String? = null
 
     /** JSON {url, name, mime} of a finished recording or shared video, waiting for the page. */

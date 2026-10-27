@@ -13,30 +13,36 @@ import java.io.File
 import kotlin.concurrent.thread
 
 /**
- * Records a MediaProjection, following the screen's orientation.
+ * Records takes from one MediaProjection, following the screen's orientation.
+ *
+ * Android allows a single VirtualDisplay per projection, so it is created on the
+ * first take and kept (detached from any encoder between takes) for the next ones.
  *
  * An encoder's frame size is fixed, so a landscape video played after starting in
  * portrait would end up letterboxed in a tall frame. Instead, every rotation closes
- * the current [Segment] and starts a new one sized for the new orientation. When
- * recording stops, the longest segment is kept — the part the user actually came to
+ * the current [Segment] and starts a new one sized for the new orientation. When a
+ * take stops, its longest segment is kept — the part the user actually came to
  * record — and the short stretches around it (getting there, stopping) are dropped.
  */
 class ScreenRecorder(
     context: Context,
     private val projection: MediaProjection,
     private val dpi: Int,
-    private val withAudio: Boolean,
-    private val dir: File,
-    private val baseName: String,
 ) {
     private val displays = context.getSystemService(DisplayManager::class.java)
     private val main = Handler(Looper.getMainLooper())
     private val lock = Object()
     private var display: VirtualDisplay? = null
+
+    // Current take.
+    private var recording = false
     private var current: Segment? = null
+    private var deviceAudio = false
+    private var mic = false
+    private var dir = File("")
+    private var baseName = ""
     private var landscape = false
     private var index = 0
-    private var stopped = false
     private val closing = ArrayList<Thread>()
     private val results = ArrayList<Segment.Result>()
 
@@ -48,29 +54,38 @@ class ScreenRecorder(
         override fun onDisplayRemoved(displayId: Int) {}
     }
 
-    fun start() {
-        val (w, h) = screenSize()
-        landscape = w > h
-        val seg = newSegment(w, h)
-        display = projection.createVirtualDisplay(
-            "VideoCompressor", seg.width, seg.height, dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, seg.surface, null, null,
-        )
-        seg.start()
-        current = seg
+    init {
         displays.registerDisplayListener(listener, main)
     }
 
-    /** Finalizes the recording; returns the kept file, or null if nothing usable was recorded. */
-    fun stop(): File? {
-        main.post { displays.unregisterDisplayListener(listener) }
+    fun startTake(deviceAudio: Boolean, mic: Boolean, dir: File, baseName: String) = synchronized(lock) {
+        check(!recording) { "already recording" }
+        this.deviceAudio = deviceAudio
+        this.mic = mic
+        this.dir = dir
+        this.baseName = baseName
+        index = 0
+        closing.clear()
+        synchronized(results) { results.clear() }
+
+        val (w, h) = screenSize()
+        landscape = w > h
+        val seg = newSegment(w, h)
+        attach(seg)
+        seg.start()
+        current = seg
+        recording = true
+    }
+
+    /** Finalizes the take; returns the kept file, or null if nothing usable was recorded. */
+    fun stopTake(): File? {
         val last = synchronized(lock) {
-            stopped = true
+            recording = false
+            display?.surface = null
             current.also { current = null }
         }
         last?.stop()?.let { synchronized(results) { results += it } }
         synchronized(lock) { closing.toList() }.forEach { it.join(8000) }
-        try { display?.release() } catch (_: Exception) {}
 
         val all = synchronized(results) { results.toList() }
         val best = all.maxByOrNull { it.durationUs } ?: return null
@@ -79,20 +94,38 @@ class ScreenRecorder(
         return if (best.file.renameTo(target)) target else best.file
     }
 
+    fun release() {
+        main.post { displays.unregisterDisplayListener(listener) }
+        try { display?.release() } catch (_: Exception) {}
+        display = null
+    }
+
+    /** Must hold [lock]. Points the VirtualDisplay at [seg], creating it on first use. */
+    private fun attach(seg: Segment) {
+        val vd = display
+        if (vd == null) {
+            display = projection.createVirtualDisplay(
+                "VideoCompressor", seg.width, seg.height, dpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, seg.surface, null, null,
+            )
+        } else {
+            vd.surface = null
+            vd.resize(seg.width, seg.height, dpi)
+            vd.surface = seg.surface
+        }
+    }
+
     private fun onRotation() = synchronized(lock) {
-        if (stopped) return@synchronized
+        if (!recording) return@synchronized
         val (w, h) = screenSize()
         if ((w > h) == landscape) return@synchronized
-        val vd = display ?: return@synchronized
         val old = current ?: return@synchronized
         val seg = try { newSegment(w, h) } catch (e: Exception) {
             Log.w("ScreenRecorder", "couldn't start a segment for the new orientation", e)
             return@synchronized
         }
         landscape = w > h
-        vd.surface = null
-        vd.resize(seg.width, seg.height, dpi)
-        vd.surface = seg.surface
+        attach(seg)
         seg.start()
         current = seg
         closing += thread(name = "vc-close") {
@@ -102,7 +135,7 @@ class ScreenRecorder(
 
     private fun newSegment(w: Int, h: Int): Segment {
         index++
-        return Segment(projection, w, h, withAudio, File(dir, "$baseName-$index.mp4"))
+        return Segment(projection, w, h, deviceAudio, mic, File(dir, "$baseName-$index.mp4"))
             .also { it.prepare() }
     }
 

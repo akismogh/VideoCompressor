@@ -150,6 +150,7 @@ function App() {
               error={recorder.error}
               onStart={recorder.start}
               onStop={recorder.stop}
+              onEndSession={recorder.endSession}
             />
           )}
 

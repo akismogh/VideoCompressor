@@ -9,12 +9,14 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.concurrent.thread
 import kotlin.math.max
 import kotlin.math.min
@@ -22,14 +24,16 @@ import kotlin.math.min
 /**
  * One stretch of a screen recording in a single orientation, encoded into its own
  * MP4: the frames [ScreenRecorder]'s VirtualDisplay draws into [surface] as H.264,
- * plus, optionally, the device's playback audio as AAC (AudioPlaybackCapture).
+ * plus an AAC track mixing whichever of the device's playback audio
+ * (AudioPlaybackCapture) and the microphone were asked for.
  * Both tracks are stamped on the System.nanoTime() clock so they line up in the muxer.
  */
 class Segment(
     private val projection: MediaProjection,
     private val screenWidth: Int,
     private val screenHeight: Int,
-    withAudio: Boolean,
+    private val deviceAudio: Boolean,
+    private val mic: Boolean,
     val output: File,
 ) {
     class Result(val file: File, val durationUs: Long)
@@ -43,14 +47,15 @@ class Segment(
         const val SAMPLE_RATE = 48_000
         const val CHANNELS = 2
         const val BYTES_PER_FRAME = CHANNELS * 2
-        const val AUDIO_CHUNK_BYTES = SAMPLE_RATE * BYTES_PER_FRAME / 50 // 20 ms
+        const val CHUNK_FRAMES = SAMPLE_RATE / 50 // 20 ms
+        const val AUDIO_CHUNK_BYTES = CHUNK_FRAMES * BYTES_PER_FRAME
         const val MAX_PENDING = 600
         val LONG_SIDE_LIMITS = intArrayOf(1920, 1280)
     }
 
     private class Sample(val kind: Int, val data: ByteArray, val ptsUs: Long, val flags: Int)
 
-    private var audioEnabled = withAudio
+    private var audioEnabled = deviceAudio || mic
     private val muxer = MediaMuxer(output.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
     private val lock = Object()
     private val tracks = intArrayOf(-1, -1)
@@ -63,7 +68,8 @@ class Segment(
     private lateinit var videoCodec: MediaCodec
     private var inputSurface: Surface? = null
     private var audioCodec: MediaCodec? = null
-    private var audioRecord: AudioRecord? = null
+    private var deviceRecord: AudioRecord? = null
+    private var micRecord: AudioRecord? = null
     private var videoThread: Thread? = null
     private var audioThread: Thread? = null
     private var startUs = 0L
@@ -101,7 +107,8 @@ class Segment(
         audioThread?.let { t ->
             t.join(1500)
             if (t.isAlive) {
-                try { audioRecord?.stop() } catch (_: Exception) {}
+                try { deviceRecord?.stop() } catch (_: Exception) {}
+                try { micRecord?.stop() } catch (_: Exception) {}
                 t.join(2000)
             }
         }
@@ -112,7 +119,8 @@ class Segment(
         inputSurface?.release()
         try { audioCodec?.stop() } catch (_: Exception) {}
         try { audioCodec?.release() } catch (_: Exception) {}
-        try { audioRecord?.release() } catch (_: Exception) {}
+        try { deviceRecord?.release() } catch (_: Exception) {}
+        try { micRecord?.release() } catch (_: Exception) {}
 
         val ok = synchronized(lock) {
             var finished = muxerStarted && wroteVideo
@@ -199,30 +207,11 @@ class Segment(
 
     // ── Audio ────────────────────────────────────────────────────────────────
 
-    @SuppressLint("MissingPermission") // RecordService checks RECORD_AUDIO before asking for audio
     private fun configureAudio(): Boolean {
+        if (deviceAudio) deviceRecord = openDeviceCapture()
+        if (mic) micRecord = openMic()
+        if (deviceRecord == null && micRecord == null) return false
         return try {
-            val capture = AudioPlaybackCaptureConfiguration.Builder(projection)
-                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                .build()
-            val pcm = AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(SAMPLE_RATE)
-                .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
-                .build()
-            val minBuf = AudioRecord.getMinBufferSize(
-                SAMPLE_RATE, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-            val rec = AudioRecord.Builder()
-                .setAudioFormat(pcm)
-                .setBufferSizeInBytes(max(minBuf * 4, AUDIO_CHUNK_BYTES * 8))
-                .setAudioPlaybackCaptureConfig(capture)
-                .build()
-            if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                rec.release()
-                return false
-            }
             val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, SAMPLE_RATE, CHANNELS).apply {
                 setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
                 setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
@@ -231,54 +220,133 @@ class Segment(
             val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             codec.start()
-            audioRecord = rec
             audioCodec = codec
             true
         } catch (e: Exception) {
-            Log.w(TAG, "device audio unavailable, recording video only", e)
+            Log.w(TAG, "AAC encoder unavailable, recording video only", e)
+            deviceRecord?.release()
+            micRecord?.release()
+            deviceRecord = null
+            micRecord = null
             false
         }
     }
 
+    @SuppressLint("MissingPermission") // RecordService checks RECORD_AUDIO before asking for audio
+    private fun openDeviceCapture(): AudioRecord? = try {
+        val capture = AudioPlaybackCaptureConfiguration.Builder(projection)
+            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+            .addMatchingUsage(AudioAttributes.USAGE_GAME)
+            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+            .build()
+        val minBuf = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+        AudioRecord.Builder()
+            .setAudioFormat(pcmFormat(AudioFormat.CHANNEL_IN_STEREO))
+            .setBufferSizeInBytes(max(minBuf * 4, AUDIO_CHUNK_BYTES * 8))
+            .setAudioPlaybackCaptureConfig(capture)
+            .build()
+            .takeIfInitialized()
+    } catch (e: Exception) {
+        Log.w(TAG, "device audio unavailable", e)
+        null
+    }
+
+    /**
+     * Mono microphone. With device audio on as well, the voice-communication source
+     * lets the platform's echo canceller keep the speaker's sound from being picked
+     * up a second time.
+     */
+    @SuppressLint("MissingPermission")
+    private fun openMic(): AudioRecord? = try {
+        val minBuf = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        AudioRecord.Builder()
+            .setAudioSource(
+                if (deviceAudio) MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                else MediaRecorder.AudioSource.MIC)
+            .setAudioFormat(pcmFormat(AudioFormat.CHANNEL_IN_MONO))
+            .setBufferSizeInBytes(max(minBuf * 4, CHUNK_FRAMES * 2 * 8))
+            .build()
+            .takeIfInitialized()
+    } catch (e: Exception) {
+        Log.w(TAG, "microphone unavailable", e)
+        null
+    }
+
+    private fun pcmFormat(channelMask: Int): AudioFormat = AudioFormat.Builder()
+        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+        .setSampleRate(SAMPLE_RATE)
+        .setChannelMask(channelMask)
+        .build()
+
+    private fun AudioRecord.takeIfInitialized(): AudioRecord? =
+        if (state == AudioRecord.STATE_INITIALIZED) this else { release(); null }
+
+    /** Reads the next chunk as stereo PCM into [out]; returns frames read, or -1 on error. */
+    private fun readChunk(out: ShortArray, micBuf: ShortArray): Int {
+        val dev = deviceRecord
+        val mic = micRecord
+        if (dev != null) {
+            val n = dev.read(out, 0, CHUNK_FRAMES * CHANNELS)
+            if (n < 0) return -1
+            val frames = n / CHANNELS
+            if (mic != null) {
+                // The device capture sets the pace; mix in whatever the mic has ready.
+                val m = max(0, mic.read(micBuf, 0, frames, AudioRecord.READ_NON_BLOCKING))
+                for (i in 0 until m) {
+                    val v = micBuf[i].toInt()
+                    out[2 * i] = clip(out[2 * i] + v)
+                    out[2 * i + 1] = clip(out[2 * i + 1] + v)
+                }
+            }
+            return frames
+        }
+        val m = mic?.read(micBuf, 0, CHUNK_FRAMES) ?: return -1
+        if (m < 0) return -1
+        for (i in 0 until m) {
+            out[2 * i] = micBuf[i]
+            out[2 * i + 1] = micBuf[i]
+        }
+        return m
+    }
+
+    private fun clip(v: Int): Short =
+        v.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+
     private fun pumpAudio() {
         val codec = audioCodec ?: return
-        val rec = audioRecord ?: return
         val info = MediaCodec.BufferInfo()
+        val pcm = ShortArray(CHUNK_FRAMES * CHANNELS)
+        val micBuf = ShortArray(CHUNK_FRAMES)
         var frames = 0L
         var base = -1L
-        fun ptsNow() = base + frames * 1_000_000L / SAMPLE_RATE
+        fun ptsNow() = max(base + frames * 1_000_000L / SAMPLE_RATE, 0)
         try {
-            rec.startRecording()
-            var eosQueued = false
-            while (!eosQueued) {
-                val inIdx = codec.dequeueInputBuffer(10_000)
-                if (inIdx >= 0) {
-                    if (stopping) {
-                        codec.queueInputBuffer(inIdx, 0, 0, max(ptsNow(), 0), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        eosQueued = true
-                    } else {
-                        val inBuf = codec.getInputBuffer(inIdx)!!
-                        inBuf.clear()
-                        val n = rec.read(inBuf, min(inBuf.remaining(), AUDIO_CHUNK_BYTES))
-                        if (n < 0) {
-                            codec.queueInputBuffer(inIdx, 0, 0, max(ptsNow(), 0), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                            eosQueued = true
-                        } else {
-                            if (base < 0) {
-                                base = System.nanoTime() / 1000 - (n / BYTES_PER_FRAME) * 1_000_000L / SAMPLE_RATE
-                            }
-                            val pts = ptsNow()
-                            frames += n / BYTES_PER_FRAME
-                            codec.queueInputBuffer(inIdx, 0, n, pts, 0)
-                        }
-                    }
+            deviceRecord?.startRecording()
+            micRecord?.startRecording()
+            while (true) {
+                val n = if (stopping) -1 else readChunk(pcm, micBuf)
+                if (n == 0) continue
+                val inIdx = dequeueInput(codec, info)
+                if (n < 0) {
+                    codec.queueInputBuffer(inIdx, 0, 0, ptsNow(), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    drainAudio(codec, info, 2000)
+                    break
                 }
-                if (drainAudio(codec, info, if (eosQueued) 2000 else 0)) break
+                if (base < 0) base = System.nanoTime() / 1000 - n * 1_000_000L / SAMPLE_RATE
+                val inBuf = codec.getInputBuffer(inIdx)!!
+                inBuf.clear()
+                inBuf.order(ByteOrder.nativeOrder()).asShortBuffer().put(pcm, 0, n * CHANNELS)
+                codec.queueInputBuffer(inIdx, 0, n * BYTES_PER_FRAME, ptsNow(), 0)
+                frames += n
+                drainAudio(codec, info, 0)
             }
         } catch (e: Exception) {
             Log.w(TAG, "audio pump stopped", e)
         } finally {
-            try { rec.stop() } catch (_: Exception) {}
+            try { deviceRecord?.stop() } catch (_: Exception) {}
+            try { micRecord?.stop() } catch (_: Exception) {}
             synchronized(lock) {
                 // No audio ever reached the muxer: fall back to a video-only file.
                 if (tracks[AUDIO] < 0) {
@@ -286,6 +354,15 @@ class Segment(
                     maybeStartMuxer()
                 }
             }
+        }
+    }
+
+    /** Waits for a free encoder input buffer, draining output meanwhile so it can't stall. */
+    private fun dequeueInput(codec: MediaCodec, info: MediaCodec.BufferInfo): Int {
+        while (true) {
+            val idx = codec.dequeueInputBuffer(10_000)
+            if (idx >= 0) return idx
+            drainAudio(codec, info, 0)
         }
     }
 

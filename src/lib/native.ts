@@ -6,14 +6,19 @@ export type RecordingPhase = 'idle' | 'starting' | 'recording' | 'finishing'
 export interface RecordingState {
   phase: RecordingPhase
   startedAt: number
+  /** A consented capture session is alive: recording again won't prompt. */
+  sessionActive: boolean
+  /** When the idle session ends (ms epoch); 0 while recording or with no session. */
+  sessionEndsAt: number
 }
 
 interface VCAndroidBridge {
   getRecordingState(): string
   takePendingMedia(): string
   takeError(): string
-  startRecording(withAudio: boolean): void
+  startRecording(deviceAudio: boolean, mic: boolean): void
   stopRecording(): void
+  endSession(): void
   beginOutput(name: string): void
   appendOutput(base64: string): void
   finishOutput(share: boolean): boolean
@@ -28,7 +33,12 @@ declare global {
 
 export const native: VCAndroidBridge | null = window.VCAndroid ?? null
 
-const IDLE: RecordingState = { phase: 'idle', startedAt: 0 }
+const IDLE: RecordingState = {
+  phase: 'idle',
+  startedAt: 0,
+  sessionActive: false,
+  sessionEndsAt: 0,
+}
 const CHUNK_BYTES = 512 * 1024
 
 export function readRecordingState(): RecordingState {

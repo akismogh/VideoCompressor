@@ -47,12 +47,21 @@ export function useNativeRecording(onFile: (file: File) => Promise<void>) {
     return onNativeChange(() => void sync())
   }, [])
 
-  const start = useCallback((withAudio: boolean) => {
+  const start = useCallback((deviceAudio: boolean, mic: boolean) => {
     setError(null)
-    native?.startRecording(withAudio)
+    native?.startRecording(deviceAudio, mic)
   }, [])
 
   const stop = useCallback(() => native?.stopRecording(), [])
+  const endSession = useCallback(() => native?.endSession(), [])
 
-  return { supported: native !== null, state, error, importing, start, stop }
+  return {
+    supported: native !== null,
+    state,
+    error,
+    importing,
+    start,
+    stop,
+    endSession,
+  }
 }

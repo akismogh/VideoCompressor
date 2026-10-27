@@ -15,6 +15,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import android.view.ViewGroup
@@ -54,7 +55,8 @@ class MainActivity : Activity() {
     }
 
     private lateinit var webView: WebView
-    private var wantAudio = true
+    private var wantDeviceAudio = true
+    private var wantMic = false
     private var leaveWhenRecording = false
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
@@ -191,25 +193,37 @@ class MainActivity : Activity() {
 
     // ── Recording flow ───────────────────────────────────────────────────────
 
-    private fun beginRecording(withAudio: Boolean) {
+    private fun beginRecording(deviceAudio: Boolean, mic: Boolean) {
         if (RecState.phase != RecState.Phase.IDLE) return
-        wantAudio = withAudio
+        wantDeviceAudio = deviceAudio
+        wantMic = mic
         val need = mutableListOf<String>()
-        if (withAudio && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
+        if ((deviceAudio || mic) &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             need += Manifest.permission.RECORD_AUDIO
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             need += Manifest.permission.POST_NOTIFICATIONS
-        if (need.isEmpty()) requestCapture() else requestPermissions(need.toTypedArray(), REQ_PERMS)
+        if (need.isEmpty()) proceedToRecord() else requestPermissions(need.toTypedArray(), REQ_PERMS)
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
         if (code != REQ_PERMS) return
-        if (wantAudio && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            toast("Recording without device sound (audio permission was denied)")
-            wantAudio = false
+        if ((wantDeviceAudio || wantMic) &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            toast("Recording without sound (audio permission was denied)")
+            wantDeviceAudio = false
+            wantMic = false
         }
-        requestCapture()
+        proceedToRecord()
+    }
+
+    /** Reuses the live capture session if there is one; otherwise asks for screen capture. */
+    private fun proceedToRecord() {
+        if (RecState.sessionActive) {
+            leaveWhenRecording = true
+            RecordService.record(this, wantDeviceAudio, wantMic)
+        } else requestCapture()
     }
 
     private fun requestCapture() {
@@ -241,10 +255,11 @@ class MainActivity : Activity() {
                 }
                 leaveWhenRecording = true
                 startForegroundService(Intent(this, RecordService::class.java)
-                    .setAction(RecordService.ACTION_START)
+                    .setAction(RecordService.ACTION_START_SESSION)
                     .putExtra(RecordService.EXTRA_CODE, resultCode)
                     .putExtra(RecordService.EXTRA_DATA, data)
-                    .putExtra(RecordService.EXTRA_AUDIO, wantAudio)
+                    .putExtra(RecordService.EXTRA_DEVICE_AUDIO, wantDeviceAudio)
+                    .putExtra(RecordService.EXTRA_MIC, wantMic)
                     .putExtra(RecordService.EXTRA_DPI, resources.displayMetrics.densityDpi))
             }
         }
@@ -294,10 +309,18 @@ class MainActivity : Activity() {
 
     inner class Bridge {
         @JavascriptInterface
-        fun getRecordingState(): String = JSONObject()
-            .put("phase", RecState.phase.js)
-            .put("startedAt", RecState.startedAt)
-            .toString()
+        fun getRecordingState(): String {
+            val expires = RecState.sessionExpiresAt
+            return JSONObject()
+                .put("phase", RecState.phase.js)
+                .put("startedAt", RecState.startedAt)
+                .put("sessionActive", RecState.sessionActive)
+                // Wall-clock time the idle session ends, for the page's countdown.
+                .put("sessionEndsAt",
+                    if (expires == 0L) 0L
+                    else System.currentTimeMillis() + (expires - SystemClock.elapsedRealtime()))
+                .toString()
+        }
 
         @JavascriptInterface
         fun takePendingMedia(): String {
@@ -314,10 +337,14 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun startRecording(withAudio: Boolean) = runOnUiThread { beginRecording(withAudio) }
+        fun startRecording(deviceAudio: Boolean, mic: Boolean) =
+            runOnUiThread { beginRecording(deviceAudio, mic) }
 
         @JavascriptInterface
         fun stopRecording() = RecordService.stop(this@MainActivity)
+
+        @JavascriptInterface
+        fun endSession() = RecordService.end(this@MainActivity)
 
         @JavascriptInterface
         fun beginOutput(name: String) {
