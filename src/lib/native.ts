@@ -19,6 +19,7 @@ interface VCAndroidBridge {
   startRecording(deviceAudio: boolean, mic: boolean): void
   stopRecording(): void
   endSession(): void
+  recordCamera(): void
   beginOutput(name: string): void
   appendOutput(base64: string): void
   finishOutput(share: boolean): boolean

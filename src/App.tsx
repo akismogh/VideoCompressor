@@ -151,6 +151,7 @@ function App() {
               onStart={recorder.start}
               onStop={recorder.stop}
               onEndSession={recorder.endSession}
+              onCamera={recorder.camera}
             />
           )}
 

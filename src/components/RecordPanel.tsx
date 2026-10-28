@@ -8,6 +8,7 @@ interface RecordPanelProps {
   onStart: (deviceAudio: boolean, mic: boolean) => void
   onStop: () => void
   onEndSession: () => void
+  onCamera: () => void
 }
 
 const PREFS_KEY = 'videoCompressor.recordAudio'
@@ -30,6 +31,7 @@ export function RecordPanel({
   onStart,
   onStop,
   onEndSession,
+  onCamera,
 }: RecordPanelProps) {
   const [prefs, setPrefs] = useState(loadPrefs)
   const [now, setNow] = useState(() => Date.now())
@@ -68,6 +70,16 @@ export function RecordPanel({
           >
             <span className="h-3 w-3 rounded-full bg-white" />
             Record screen
+          </button>
+          <button
+            type="button"
+            onClick={onCamera}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 dark:border-slate-700 px-4 py-3 font-medium text-slate-700 dark:text-slate-200 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
+              <path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z" />
+            </svg>
+            Record with camera
           </button>
           <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-500 dark:text-slate-400 select-none">
             <label className="flex items-center gap-2">

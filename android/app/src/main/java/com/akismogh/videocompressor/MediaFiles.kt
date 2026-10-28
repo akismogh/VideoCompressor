@@ -34,6 +34,11 @@ object MediaFiles {
         return "screen-${stamp()}"
     }
 
+    fun newCameraFile(ctx: Context): File {
+        clearDir(inputDir(ctx))
+        return File(inputDir(ctx), "camera-${stamp()}.mp4")
+    }
+
     fun newOutputFile(ctx: Context, name: String): File {
         clearDir(outputDir(ctx))
         return File(outputDir(ctx), safeName(name, "compressed.mp4"))

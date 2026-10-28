@@ -54,6 +54,10 @@ export function useNativeRecording(onFile: (file: File) => Promise<void>) {
 
   const stop = useCallback(() => native?.stopRecording(), [])
   const endSession = useCallback(() => native?.endSession(), [])
+  const camera = useCallback(() => {
+    setError(null)
+    native?.recordCamera()
+  }, [])
 
   return {
     supported: native !== null,
@@ -63,5 +67,6 @@ export function useNativeRecording(onFile: (file: File) => Promise<void>) {
     start,
     stop,
     endSession,
+    camera,
   }
 }

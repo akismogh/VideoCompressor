@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.NotificationManager
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ComponentName
 import android.content.Intent
@@ -16,6 +17,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import android.view.ViewGroup
@@ -31,6 +33,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.webkit.WebViewAssetLoader
 import org.json.JSONObject
 import java.io.File
@@ -52,6 +55,8 @@ class MainActivity : Activity() {
         private const val REQ_CAPTURE = 1
         private const val REQ_PERMS = 2
         private const val REQ_FILE = 3
+        private const val REQ_CAMERA = 4
+        private const val STATE_CAMERA_FILE = "cameraFile"
     }
 
     private lateinit var webView: WebView
@@ -59,6 +64,7 @@ class MainActivity : Activity() {
     private var wantMic = false
     private var leaveWhenRecording = false
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var cameraFile: File? = null
 
     private var outFile: File? = null
     private var outStream: FileOutputStream? = null
@@ -68,6 +74,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WebView.setWebContentsDebuggingEnabled(true)
+        // The system may recreate us while the camera app is in front.
+        cameraFile = savedInstanceState?.getString(STATE_CAMERA_FILE)?.let(::File)
 
         val loader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
@@ -130,6 +138,11 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        cameraFile?.let { outState.putString(STATE_CAMERA_FILE, it.path) }
     }
 
     override fun onResume() {
@@ -238,11 +251,49 @@ class MainActivity : Activity() {
         startActivityForResult(intent, REQ_CAPTURE)
     }
 
+    // ── Camera ───────────────────────────────────────────────────────────────
+
+    /** Opens the camera app in video mode, writing straight into the input dir. */
+    private fun openCamera() {
+        val file = MediaFiles.newCameraFile(this)
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+        val intent = Intent(MediaStore.ACTION_VIDEO_CAPTURE)
+            .putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        cameraFile = file
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQ_CAMERA)
+        } catch (e: ActivityNotFoundException) {
+            cameraFile = null
+            toast("No camera app found")
+        }
+    }
+
+    private fun onCameraResult(resultCode: Int, data: Intent?) {
+        val file = cameraFile
+        cameraFile = null
+        if (resultCode != RESULT_OK) {
+            file?.delete()
+            return
+        }
+        when {
+            file != null && file.length() > 0 -> {
+                RecState.pendingMedia = MediaFiles.describe(file)
+                RecState.changed()
+            }
+            // Some camera apps ignore EXTRA_OUTPUT and hand back their own uri instead.
+            data?.data != null -> importShared(data.data!!)
+            else -> toast("The camera didn't return a video")
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
+            REQ_CAMERA -> onCameraResult(resultCode, data)
             REQ_FILE -> {
                 filePathCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
                 filePathCallback = null
@@ -345,6 +396,9 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun endSession() = RecordService.end(this@MainActivity)
+
+        @JavascriptInterface
+        fun recordCamera() = runOnUiThread { openCamera() }
 
         @JavascriptInterface
         fun beginOutput(name: String) {

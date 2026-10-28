@@ -27,4 +27,5 @@ android {
 
 dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
+    implementation("androidx.core:core:1.13.1") // FileProvider for the camera's output file
 }
