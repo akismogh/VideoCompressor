@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#F8FAFC</color>
-    <color name="accent">#4F46E5</color>
+    <color name="bg">#4A4A48</color>
+    <color name="accent">#EEFF2B</color>
 
-    <style name="AppTheme" parent="android:Theme.DeviceDefault.DayNight">
+    <!-- Always dark, matching the web UI. -->
+    <style name="AppTheme" parent="android:Theme.DeviceDefault">
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@color/bg</item>

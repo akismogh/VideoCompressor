@@ -9,7 +9,6 @@ import android.content.ClipData
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.graphics.Color
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
@@ -33,6 +32,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.Toast
+import android.window.OnBackInvokedDispatcher
 import androidx.core.content.FileProvider
 import androidx.webkit.WebViewAssetLoader
 import org.json.JSONObject
@@ -56,6 +56,7 @@ class MainActivity : Activity() {
         private const val REQ_PERMS = 2
         private const val REQ_FILE = 3
         private const val REQ_CAMERA = 4
+        private const val REQ_PICK = 5
         private const val STATE_CAMERA_FILE = "cameraFile"
     }
 
@@ -105,6 +106,8 @@ class MainActivity : Activity() {
                 try { startActivity(Intent(Intent.ACTION_VIEW, url)) } catch (_: Exception) {}
                 return true
             }
+
+            override fun onPageFinished(view: WebView, url: String) = injectInsets()
         }
 
         webView.webChromeClient = object : WebChromeClient() {
@@ -130,6 +133,10 @@ class MainActivity : Activity() {
         }
 
         RecState.listener = { onNativeStateChanged() }
+        if (Build.VERSION.SDK_INT >= 33) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT) { handleBack() }
+        }
         handleIntent(intent)
         webView.loadUrl("${MediaFiles.HOST}/assets/index.html")
     }
@@ -176,16 +183,46 @@ class MainActivity : Activity() {
     }
 
     private fun importShared(uri: Uri) {
+        RecState.importing = true
+        RecState.changed()
         Thread {
             try {
                 RecState.pendingMedia = MediaFiles.importShared(this, uri)
             } catch (e: Exception) {
                 Log.e("MainActivity", "import failed", e)
-                RecState.error = "Couldn't open the shared video."
+                RecState.error = "Couldn't open that video."
             }
+            RecState.importing = false
             RecState.changed()
         }.start()
     }
+
+    /** Library: the system photo picker, limited to videos. */
+    private fun pickVideo() {
+        val intent = if (Build.VERSION.SDK_INT >= 33) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).setType("video/*")
+        } else {
+            Intent(Intent.ACTION_GET_CONTENT).setType("video/*").addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQ_PICK)
+        } catch (e: ActivityNotFoundException) {
+            toast("No photo picker found")
+        }
+    }
+
+    // ── Back button: let the page step back through its screens first ───────
+
+    private fun handleBack() {
+        webView.evaluateJavascript("(window.__vcBack && window.__vcBack()) ? 'y' : 'n'") { result ->
+            if (result != "\"y\"") finish()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() = handleBack()
 
     private fun onNativeStateChanged() {
         if (leaveWhenRecording && RecState.phase == RecState.Phase.RECORDING) {
@@ -294,6 +331,7 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
             REQ_CAMERA -> onCameraResult(resultCode, data)
+            REQ_PICK -> if (resultCode == RESULT_OK) data?.data?.let { importShared(it) }
             REQ_FILE -> {
                 filePathCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
                 filePathCallback = null
@@ -338,22 +376,37 @@ class MainActivity : Activity() {
 
     // ── System bars ──────────────────────────────────────────────────────────
 
+    /**
+     * Always-dark UI drawn edge to edge: the page's gradient runs behind the status
+     * and navigation bars, and their sizes are handed to it as --sat / --sab.
+     */
     private fun applySystemBars(root: FrameLayout) {
-        val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-            Configuration.UI_MODE_NIGHT_YES
-        val bg = Color.parseColor(if (dark) "#020617" else "#F8FAFC")
+        val bg = Color.parseColor("#4A4A48")
         root.setBackgroundColor(bg)
         webView.setBackgroundColor(bg)
-        if (!dark) {
-            window.insetsController?.setSystemBarsAppearance(
-                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
-        }
-        root.setOnApplyWindowInsetsListener { v, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+        // Light (white) bar icons regardless of the system theme.
+        window.insetsController?.setSystemBarsAppearance(0,
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            val density = resources.displayMetrics.density
+            barTopCss = (bars.top / density).toInt()
+            barBottomCss = (bars.bottom / density).toInt()
+            injectInsets()
             WindowInsets.CONSUMED
         }
+    }
+
+    private var barTopCss = 0
+    private var barBottomCss = 0
+
+    private fun injectInsets() {
+        if (!::webView.isInitialized) return
+        webView.evaluateJavascript(
+            "document.documentElement.style.setProperty('--sat','${barTopCss}px');" +
+                "document.documentElement.style.setProperty('--sab','${barBottomCss}px');",
+            null,
+        )
     }
 
     // ── JS bridge ────────────────────────────────────────────────────────────
@@ -366,6 +419,7 @@ class MainActivity : Activity() {
                 .put("phase", RecState.phase.js)
                 .put("startedAt", RecState.startedAt)
                 .put("sessionActive", RecState.sessionActive)
+                .put("importing", RecState.importing)
                 // Wall-clock time the idle session ends, for the page's countdown.
                 .put("sessionEndsAt",
                     if (expires == 0L) 0L
@@ -399,6 +453,9 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun recordCamera() = runOnUiThread { openCamera() }
+
+        @JavascriptInterface
+        fun pickVideo() = runOnUiThread { this@MainActivity.pickVideo() }
 
         @JavascriptInterface
         fun beginOutput(name: String) {

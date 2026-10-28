@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { FileUpload } from './components/FileUpload'
-import { VideoTrimmer } from './components/VideoTrimmer'
-import { CompressionPanel } from './components/CompressionPanel'
-import { ResultPanel } from './components/ResultPanel'
-import { RecordPanel } from './components/RecordPanel'
+import { HomeScreen } from './components/HomeScreen'
+import { EditScreen } from './components/EditScreen'
+import { ResultScreen } from './components/ResultScreen'
 import { useFFmpeg } from './hooks/useFFmpeg'
 import { useNativeRecording } from './hooks/useNativeRecording'
 import { readVideoMeta } from './lib/videoMeta'
@@ -12,9 +10,16 @@ import { onFFmpegProgress } from './lib/ffmpeg'
 import { consumePendingSharedFile } from './lib/shareTarget'
 import type { CompressResult, VideoMeta } from './types'
 
+declare global {
+  interface Window {
+    /** Called by the Android shell's back button; true when the page handled it. */
+    __vcBack?: () => boolean
+  }
+}
+
 function App() {
   const [video, setVideo] = useState<VideoMeta | null>(null)
-  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [inputError, setInputError] = useState<string | null>(null)
   const [awaitingShare, setAwaitingShare] = useState(
     () => new URLSearchParams(window.location.search).has('shared'),
   )
@@ -27,10 +32,14 @@ function App() {
   const [progress, setProgress] = useState(0)
   const [processError, setProcessError] = useState<string | null>(null)
   const [result, setResult] = useState<CompressResult | null>(null)
+  const [showResult, setShowResult] = useState(false)
 
   const { ensureLoaded } = useFFmpeg()
   const resultUrlRef = useRef<string | null>(null)
   const videoUrlRef = useRef<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const screen = !video ? 'home' : showResult && result ? 'result' : 'edit'
 
   useEffect(() => {
     return () => {
@@ -39,48 +48,46 @@ function App() {
     }
   }, [])
 
-  const handleSelectFile = async (file: File) => {
-    setUploadError(null)
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [screen])
 
-    const looksValid =
-      file.type.startsWith('video/') || /\.(mp4|mov)$/i.test(file.name)
-    if (!looksValid) {
-      setUploadError('Please choose an MP4 or MOV video.')
+  const clearResult = () => {
+    if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current)
+    resultUrlRef.current = null
+    setResult(null)
+    setShowResult(false)
+  }
+
+  const handleSelectFile = async (file: File) => {
+    setInputError(null)
+    if (!file.type.startsWith('video/') && !/\.(mp4|mov)$/i.test(file.name)) {
+      setInputError('Please choose a video file.')
       return
     }
-
     try {
       const meta = await readVideoMeta(file)
       if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current)
       videoUrlRef.current = meta.url
-
-      if (resultUrlRef.current) {
-        URL.revokeObjectURL(resultUrlRef.current)
-        resultUrlRef.current = null
-      }
-
+      clearResult()
       setVideo(meta)
       setTrimStart(0)
       setTrimEnd(meta.duration)
-      setResult(null)
       setProcessError(null)
     } catch (err) {
-      setUploadError(
-        err instanceof Error ? err.message : 'Could not read that video.',
-      )
+      setInputError(err instanceof Error ? err.message : 'Could not read that video.')
     }
   }
 
   const recorder = useNativeRecording(handleSelectFile)
-  const loadingInput = awaitingShare || recorder.importing
 
+  // Browser fallback (PWA share target); the Android shell delivers files itself.
   useEffect(() => {
     if (!awaitingShare) return
     window.history.replaceState({}, '', window.location.pathname)
     consumePendingSharedFile()
       .then((file) => {
         if (file) return handleSelectFile(file)
-        setUploadError('No shared video was found. Try sharing it again.')
       })
       .finally(() => setAwaitingShare(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,126 +101,123 @@ function App() {
     setBusyLabel('Loading engine…')
 
     let unsubscribe: (() => void) | null = null
-
     try {
       const ffmpeg = await ensureLoaded()
       setBusyLabel('Compressing…')
       unsubscribe = onFFmpegProgress(ffmpeg, setProgress)
-
-      const output = await compressVideo(ffmpeg, video, {
-        trimStart,
-        trimEnd,
-        mute,
-      })
-
+      const output = await compressVideo(ffmpeg, video, { trimStart, trimEnd, mute })
       if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current)
       resultUrlRef.current = output.url
       setResult(output)
+      setShowResult(true)
     } catch (err) {
-      setProcessError(
-        err instanceof Error ? err.message : 'Compression failed. Try again.',
-      )
+      setProcessError(err instanceof Error ? err.message : 'Compression failed. Try again.')
     } finally {
       unsubscribe?.()
       setProcessing(false)
     }
   }
 
-  const handleReset = () => {
-    if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current)
+  const goHome = () => {
+    clearResult()
     if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current)
-    resultUrlRef.current = null
     videoUrlRef.current = null
     setVideo(null)
-    setResult(null)
     setProcessError(null)
-    setUploadError(null)
+    setInputError(null)
     setProgress(0)
   }
 
+  const pickFromLibrary = () => {
+    if (recorder.supported) recorder.pickVideo()
+    else fileInputRef.current?.click()
+  }
+
+  // Android back: result → edit → home → (shell closes the app).
+  useEffect(() => {
+    window.__vcBack = () => {
+      if (processing) return true
+      if (screen === 'result') {
+        setShowResult(false)
+        return true
+      }
+      if (screen === 'edit') {
+        goHome()
+        return true
+      }
+      return false
+    }
+  })
+
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-      <header className="mx-auto max-w-lg px-4 pt-8 pb-4 text-center">
-        <h1 className="text-2xl font-semibold">Video Compressor</h1>
-        <p className="mt-1 text-sm text-slate-400 dark:text-slate-500">
-          Trim and shrink videos for sharing — all on your device, nothing
-          uploaded.
-        </p>
-      </header>
+    <div
+      className="mx-auto min-h-screen max-w-lg px-5 pb-10"
+      style={{
+        paddingTop: 'calc(var(--sat) + 1rem)',
+        paddingBottom: 'calc(var(--sab) + 2rem)',
+      }}
+    >
+      {/* Scrim under the status bar so scrolled content doesn't collide with the clock. */}
+      <div
+        className="pointer-events-none fixed inset-x-0 top-0 z-20 bg-gradient-to-b from-[#5f5f5d] from-70% to-transparent"
+        style={{ height: 'calc(var(--sat) + 0.75rem)' }}
+      />
 
-      <main className="mx-auto flex max-w-lg flex-col gap-5 px-4 pb-16">
-        {recorder.supported &&
-          !loadingInput &&
-          (!video || recorder.state.phase !== 'idle') && (
-            <RecordPanel
-              state={recorder.state}
-              error={recorder.error}
-              onStart={recorder.start}
-              onStop={recorder.stop}
-              onEndSession={recorder.endSession}
-              onCamera={recorder.camera}
-            />
-          )}
+      {screen === 'home' && (
+        <HomeScreen
+          state={recorder.state}
+          loading={recorder.importing || awaitingShare}
+          error={recorder.error ?? inputError}
+          onRecordScreen={recorder.start}
+          onStopRecording={recorder.stop}
+          onCamera={recorder.camera}
+          onLibrary={pickFromLibrary}
+          onEndSession={recorder.endSession}
+        />
+      )}
 
-        {loadingInput && !video && (
-          <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 px-6 py-16 text-center">
-            <div className="text-4xl animate-pulse">🎬</div>
-            <p className="text-base font-medium text-slate-700 dark:text-slate-200">
-              {recorder.importing ? 'Loading video…' : 'Loading shared video…'}
-            </p>
-          </div>
-        )}
+      {screen === 'edit' && video && (
+        <EditScreen
+          video={video}
+          trimStart={trimStart}
+          trimEnd={trimEnd}
+          onTrimChange={(start, end) => {
+            setTrimStart(start)
+            setTrimEnd(end)
+          }}
+          mute={mute}
+          onMuteChange={setMute}
+          onCompress={handleCompress}
+          processing={processing}
+          busyLabel={busyLabel}
+          progress={progress}
+          error={processError}
+          onBack={goHome}
+        />
+      )}
 
-        {!loadingInput && !video && (
-          <FileUpload onSelect={handleSelectFile} error={uploadError} />
-        )}
+      {screen === 'result' && video && result && (
+        <ResultScreen
+          key={result.url}
+          result={result}
+          originalSize={video.file.size}
+          originalName={video.file.name}
+          onBack={() => setShowResult(false)}
+          onNew={goHome}
+        />
+      )}
 
-        {video && (
-          <>
-            <VideoTrimmer
-              video={video}
-              trimStart={trimStart}
-              trimEnd={trimEnd}
-              onChange={(start, end) => {
-                setTrimStart(start)
-                setTrimEnd(end)
-              }}
-            />
-
-            <CompressionPanel
-              mute={mute}
-              onMuteChange={setMute}
-              onCompress={handleCompress}
-              busy={processing}
-              busyLabel={busyLabel}
-              progress={progress}
-            />
-
-            {processError && (
-              <p className="text-sm text-red-500 text-center">
-                {processError}
-              </p>
-            )}
-
-            {result && (
-              <ResultPanel
-                key={result.url}
-                result={result}
-                originalSize={video.file.size}
-                originalName={video.file.name}
-              />
-            )}
-
-            <button
-              type="button"
-              onClick={handleReset}
-              className="text-sm text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-            >
-              Choose a different video
-            </button>
-          </>
-        )}
-      </main>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) void handleSelectFile(file)
+          e.target.value = ''
+        }}
+      />
     </div>
   )
 }

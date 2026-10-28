@@ -10,6 +10,8 @@ export interface RecordingState {
   sessionActive: boolean
   /** When the idle session ends (ms epoch); 0 while recording or with no session. */
   sessionEndsAt: number
+  /** The shell is copying a picked / shared video into place. */
+  importing: boolean
 }
 
 interface VCAndroidBridge {
@@ -20,6 +22,7 @@ interface VCAndroidBridge {
   stopRecording(): void
   endSession(): void
   recordCamera(): void
+  pickVideo(): void
   beginOutput(name: string): void
   appendOutput(base64: string): void
   finishOutput(share: boolean): boolean
@@ -39,6 +42,7 @@ const IDLE: RecordingState = {
   startedAt: 0,
   sessionActive: false,
   sessionEndsAt: 0,
+  importing: false,
 }
 const CHUNK_BYTES = 512 * 1024
 

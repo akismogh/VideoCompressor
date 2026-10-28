@@ -58,12 +58,17 @@ export function useNativeRecording(onFile: (file: File) => Promise<void>) {
     setError(null)
     native?.recordCamera()
   }, [])
+  const pickVideo = useCallback(() => {
+    setError(null)
+    native?.pickVideo()
+  }, [])
 
   return {
     supported: native !== null,
     state,
     error,
-    importing,
+    importing: importing || state.importing,
+    pickVideo,
     start,
     stop,
     endSession,

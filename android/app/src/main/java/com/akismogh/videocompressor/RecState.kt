@@ -21,6 +21,8 @@ object RecState {
     /** elapsedRealtime() at which the idle session ends; 0 while recording or with no session. */
     @Volatile var sessionExpiresAt = 0L
     @Volatile var error: String? = null
+    /** A picked / shared / filmed video is being copied into place. */
+    @Volatile var importing = false
 
     /** JSON {url, name, mime} of a finished recording or shared video, waiting for the page. */
     @Volatile var pendingMedia: String? = null
