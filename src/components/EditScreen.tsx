@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { VideoMeta } from '../types'
-import { formatBytes, formatTime } from '../lib/format'
+import { formatBytes, formatTime, formatTimePrecise } from '../lib/format'
 import { Gauge } from './Gauge'
 import { CircleButton, Heading, Icon, PillButton, ToggleTile } from './ui'
 
@@ -49,22 +49,53 @@ export function EditScreen({
     ((VIDEO_BPS + (mute ? 0 : AUDIO_BPS)) * length) / 8,
   )
 
-  // Keep preview playback inside the trimmed range.
+  const [playing, setPlaying] = useState(false)
+  const [current, setCurrent] = useState(0)
+  // Playback that starts inside the selection previews it and stops at the trim
+  // end; playback started outside it runs freely so you can look for new points.
+  const stopAtEnd = useRef(false)
+
   useEffect(() => {
     const el = videoRef.current
-    if (!el) return
-    const onTimeUpdate = () => {
-      if (el.currentTime >= trimEnd) {
+    if (!el || !playing) return
+    let raf = 0
+    const tick = () => {
+      if (stopAtEnd.current && el.currentTime >= trimEnd) {
         el.pause()
-        el.currentTime = trimStart
+        el.currentTime = trimEnd
+        setCurrent(trimEnd)
+        return
       }
+      setCurrent(el.currentTime)
+      raf = requestAnimationFrame(tick)
     }
-    el.addEventListener('timeupdate', onTimeUpdate)
-    return () => el.removeEventListener('timeupdate', onTimeUpdate)
-  }, [trimStart, trimEnd])
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [playing, trimEnd])
+
+  const inSelection = (t: number) => t >= trimStart && t < trimEnd
 
   const seek = (t: number) => {
-    if (videoRef.current) videoRef.current.currentTime = t
+    const el = videoRef.current
+    if (!el) return
+    el.currentTime = t
+    setCurrent(t)
+    stopAtEnd.current = inSelection(t)
+  }
+
+  const togglePlay = () => {
+    const el = videoRef.current
+    if (!el) return
+    if (!el.paused) {
+      el.pause()
+      return
+    }
+    // Sitting at the trim end (after a preview) or the very end: replay the selection.
+    if (Math.abs(el.currentTime - trimEnd) < 0.1 || el.currentTime >= duration - 0.05) {
+      el.currentTime = trimStart
+    }
+    stopAtEnd.current = inSelection(el.currentTime)
+    void el.play()
   }
 
   const setStart = (value: number) => {
@@ -79,7 +110,7 @@ export function EditScreen({
     seek(end)
   }
 
-  const playhead = () => videoRef.current?.currentTime ?? 0
+  const playhead = () => videoRef.current?.currentTime ?? current
   const startPct = (trimStart / duration) * 100
   const endPct = (trimEnd / duration) * 100
 
@@ -109,17 +140,25 @@ export function EditScreen({
         )}
       </div>
 
-      <div className="overflow-hidden rounded-[1.75rem] bg-black shadow-xl">
+      <div className="relative overflow-hidden rounded-[1.75rem] bg-black shadow-xl">
         <video
           ref={videoRef}
           src={video.url}
-          controls
           playsInline
           className="max-h-[45vh] w-full"
-          onLoadedMetadata={(e) => {
-            e.currentTarget.currentTime = trimStart
-          }}
+          onClick={togglePlay}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setPlaying(false)}
+          onSeeked={(e) => setCurrent(e.currentTarget.currentTime)}
         />
+        {!playing && (
+          <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-accent/90 text-ink">
+              <Icon name="play" className="h-7 w-7 translate-x-0.5" />
+            </span>
+          </span>
+        )}
       </div>
 
       {processing ? (
@@ -138,15 +177,50 @@ export function EditScreen({
       ) : (
         <>
           <section className="glass rounded-[1.75rem] p-4">
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-xl">Trim</h2>
-              <span className="text-muted">
-                <span className="text-2xl font-light text-white tabular-nums">{formatTime(length)}</span>{' '}
-                of {formatTime(duration)}
+            <div className="flex items-center gap-3">
+              <CircleButton
+                icon={playing ? 'pause' : 'play'}
+                label={playing ? 'Pause' : 'Play'}
+                onClick={togglePlay}
+                accent
+                size="h-12 w-12"
+              />
+              <span className="text-muted tabular-nums">
+                <span className="text-2xl font-light text-white">{formatTimePrecise(current)}</span>{' '}
+                / {formatTime(duration)}
               </span>
             </div>
 
+            {/* Playhead: free to move over the whole clip; the band marks the selection. */}
             <div className="relative mt-3 h-9">
+              <div className="absolute inset-x-[13px] top-1/2 h-1.5 -translate-y-1/2">
+                <div className="absolute inset-0 rounded-full bg-white/15" />
+                <div
+                  className="absolute inset-y-0 bg-accent/40"
+                  style={{ left: `${startPct}%`, right: `${100 - endPct}%` }}
+                />
+              </div>
+              <input
+                type="range"
+                aria-label="Playhead"
+                min={0}
+                max={duration}
+                step={0.01}
+                value={current}
+                onChange={(e) => seek(Number(e.target.value))}
+                className="scrub absolute top-1/2 w-full -translate-y-1/2"
+              />
+            </div>
+
+            <div className="mt-4 flex items-baseline justify-between">
+              <h2 className="text-xl">Trim</h2>
+              <span className="text-muted">
+                <span className="text-2xl font-light text-white tabular-nums">{formatTimePrecise(length)}</span>{' '}
+                selected
+              </span>
+            </div>
+
+            <div className="relative mt-2 h-9">
               {/* Inset by half a thumb so the fill ends exactly under each thumb's centre. */}
               <div className="absolute inset-x-[14px] top-1/2 h-2 -translate-y-1/2">
                 <div className="absolute inset-0 rounded-full bg-white/15" />
@@ -177,8 +251,8 @@ export function EditScreen({
               />
             </div>
             <div className="mt-1 flex justify-between text-sm text-muted tabular-nums">
-              <span>{formatTime(trimStart)}</span>
-              <span>{formatTime(trimEnd)}</span>
+              <span>{formatTimePrecise(trimStart)}</span>
+              <span>{formatTimePrecise(trimEnd)}</span>
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-3">

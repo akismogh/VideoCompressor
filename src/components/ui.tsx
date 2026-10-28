@@ -18,6 +18,7 @@ const PATHS = {
   markOut: 'M18 5v14M14 12H5M10 8l4 4-4 4',
   film: 'M5 4h14v16H5zM5 8h3M5 12h3M5 16h3M16 8h3M16 12h3M16 16h3',
   play: 'M8 5.5v13l10.5-6.5z',
+  pause: 'M8 5.5v13M16 5.5v13',
   redo:'M4 12a8 8 0 1 0 8-8 8.7 8.7 0 0 0-6 2.4L4 8.4M4 4v4.4h4.4',
 } as const
 

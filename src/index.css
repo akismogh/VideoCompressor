@@ -42,6 +42,31 @@ body {
   border: 1px solid rgb(255 255 255 / 0.09);
 }
 
+/* Playhead slider: white knob over a transparent track (the track is drawn behind). */
+input[type='range'].scrub {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  margin: 0;
+  height: 36px;
+}
+
+input[type='range'].scrub::-webkit-slider-runnable-track {
+  background: transparent;
+}
+
+input[type='range'].scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 5px solid var(--color-ink);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.4);
+  cursor: grab;
+}
+
 /* Dual-thumb trim slider: two stacked ranges, only the thumbs take input. */
 input[type='range'].range-thumb {
   -webkit-appearance: none;
