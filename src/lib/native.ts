@@ -27,6 +27,7 @@ interface VCAndroidBridge {
   appendOutput(base64: string): void
   finishOutput(share: boolean): boolean
   shareSaved(): boolean
+  openSaved(): boolean
 }
 
 declare global {

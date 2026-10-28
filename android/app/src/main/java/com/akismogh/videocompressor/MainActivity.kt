@@ -490,6 +490,26 @@ class MainActivity : Activity() {
             }
         }
 
+        /** Opens the saved copy in the default video viewer (Photos). */
+        @JavascriptInterface
+        fun openSaved(): Boolean {
+            val uri = lastSaved ?: return false
+            runOnUiThread {
+                val view = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "video/mp4")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try {
+                    // Straight into Google Photos, skipping the "Open with" picker.
+                    startActivity(Intent(view).setPackage("com.google.android.apps.photos"))
+                } catch (e: ActivityNotFoundException) {
+                    try { startActivity(view) } catch (e: ActivityNotFoundException) {
+                        toast("No app found to play the video")
+                    }
+                }
+            }
+            return true
+        }
+
         @JavascriptInterface
         fun shareSaved(): Boolean {
             val uri = lastSaved ?: return false

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { RecordingState } from '../lib/native'
 import { formatTime } from '../lib/format'
+import { loadAudioPrefs, saveAudioPrefs } from '../lib/prefs'
 import { Heading, Icon, ToggleTile, type IconName } from './ui'
 
 interface HomeScreenProps {
@@ -12,20 +13,6 @@ interface HomeScreenProps {
   onCamera: () => void
   onLibrary: () => void
   onEndSession: () => void
-}
-
-const PREFS_KEY = 'videoCompressor.recordAudio'
-
-function loadPrefs(): { device: boolean; mic: boolean } {
-  try {
-    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? 'null')
-    if (saved && typeof saved.device === 'boolean' && typeof saved.mic === 'boolean') {
-      return saved
-    }
-  } catch {
-    // ignore unreadable storage
-  }
-  return { device: true, mic: false }
 }
 
 function SourceTile({
@@ -66,18 +53,12 @@ export function HomeScreen({
   onLibrary,
   onEndSession,
 }: HomeScreenProps) {
-  const [prefs, setPrefs] = useState(loadPrefs)
+  const [prefs, setPrefs] = useState(loadAudioPrefs)
   const [now, setNow] = useState(() => Date.now())
   const recording = state.phase === 'recording'
   const busy = state.phase !== 'idle' || loading
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
-    } catch {
-      // per-device convenience only
-    }
-  }, [prefs])
+  useEffect(() => saveAudioPrefs(prefs), [prefs])
 
   useEffect(() => {
     if (!recording) return

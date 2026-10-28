@@ -8,7 +8,16 @@ import { readVideoMeta } from './lib/videoMeta'
 import { compressVideo } from './lib/compress'
 import { onFFmpegProgress } from './lib/ffmpeg'
 import { consumePendingSharedFile } from './lib/shareTarget'
+import { loadAudioPrefs } from './lib/prefs'
 import type { CompressResult, VideoMeta } from './types'
+
+type Source = 'screen' | 'camera' | 'library'
+
+const REDO_LABELS: Record<Source, string> = {
+  screen: 'Re-record',
+  camera: 'Retake',
+  library: 'Pick again',
+}
 
 declare global {
   interface Window {
@@ -33,6 +42,9 @@ function App() {
   const [processError, setProcessError] = useState<string | null>(null)
   const [result, setResult] = useState<CompressResult | null>(null)
   const [showResult, setShowResult] = useState(false)
+  // Where the current clip came from, so it can be captured again in one tap.
+  const [source, setSource] = useState<Source | null>(null)
+  const pendingSource = useRef<Source | null>(null)
 
   const { ensureLoaded } = useFFmpeg()
   const resultUrlRef = useRef<string | null>(null)
@@ -70,6 +82,8 @@ function App() {
       if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current)
       videoUrlRef.current = meta.url
       clearResult()
+      setSource(pendingSource.current)
+      pendingSource.current = null
       setVideo(meta)
       setTrimStart(0)
       setTrimEnd(meta.duration)
@@ -128,9 +142,17 @@ function App() {
     setProgress(0)
   }
 
-  const pickFromLibrary = () => {
-    if (recorder.supported) recorder.pickVideo()
+  const capture = (from: Source, audio = loadAudioPrefs()) => {
+    pendingSource.current = from
+    if (from === 'screen') recorder.start(audio.device, audio.mic)
+    else if (from === 'camera') recorder.camera()
+    else if (recorder.supported) recorder.pickVideo()
     else fileInputRef.current?.click()
+  }
+
+  const redo = (from: Source) => {
+    goHome()
+    capture(from)
   }
 
   // Android back: result → edit → home → (shell closes the app).
@@ -168,10 +190,10 @@ function App() {
           state={recorder.state}
           loading={recorder.importing || awaitingShare}
           error={recorder.error ?? inputError}
-          onRecordScreen={recorder.start}
+          onRecordScreen={(device, mic) => capture('screen', { device, mic })}
           onStopRecording={recorder.stop}
-          onCamera={recorder.camera}
-          onLibrary={pickFromLibrary}
+          onCamera={() => capture('camera')}
+          onLibrary={() => capture('library')}
           onEndSession={recorder.endSession}
         />
       )}
@@ -193,6 +215,7 @@ function App() {
           progress={progress}
           error={processError}
           onBack={goHome}
+          redo={source && { label: REDO_LABELS[source], onClick: () => redo(source) }}
         />
       )}
 

@@ -69,10 +69,17 @@ export function ResultScreen({ result, originalSize, originalName, onBack, onNew
 
       {native ? (
         <div className="grid grid-cols-2 gap-3">
-          <PillButton accent onClick={() => save(false)} disabled={busy || saved}>
-            <Icon name="download" />
-            {busy ? 'Saving…' : saved ? 'Saved' : 'Save'}
-          </PillButton>
+          {saved ? (
+            <PillButton accent onClick={() => native?.openSaved()} disabled={busy}>
+              <Icon name="play" />
+              Open
+            </PillButton>
+          ) : (
+            <PillButton accent onClick={() => save(false)} disabled={busy}>
+              <Icon name="download" />
+              {busy ? 'Saving…' : 'Save'}
+            </PillButton>
+          )}
           <PillButton onClick={() => save(true)} disabled={busy}>
             <Icon name="share" />
             Share

@@ -22,6 +22,8 @@ interface EditScreenProps {
   progress: number
   error: string | null
   onBack: () => void
+  /** Capture again from the same source; absent when the source isn't known. */
+  redo: { label: string; onClick: () => void } | null
 }
 
 export function EditScreen({
@@ -37,6 +39,7 @@ export function EditScreen({
   progress,
   error,
   onBack,
+  redo,
 }: EditScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const { duration } = video
@@ -89,7 +92,22 @@ export function EditScreen({
         </span>
       </div>
 
-      <Heading light="Your" bold="Clip" />
+      <div className="flex items-end justify-between gap-3">
+        <Heading light="Your" bold="Clip" />
+        {redo && (
+          <button
+            type="button"
+            onClick={redo.onClick}
+            disabled={processing}
+            className="mb-1 flex h-14 shrink-0 items-center gap-2 rounded-full bg-accent pr-5 pl-2 text-ink transition active:scale-95 disabled:opacity-40"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-ink text-accent">
+              <Icon name="redo" className="h-5 w-5" />
+            </span>
+            <span className="text-[0.95rem] font-medium">{redo.label}</span>
+          </button>
+        )}
+      </div>
 
       <div className="overflow-hidden rounded-[1.75rem] bg-black shadow-xl">
         <video
